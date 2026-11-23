@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FLIP RUN — built by an AI agent from one prompt</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0b14; height: 100%; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center;
+         font-family: "Segoe UI", system-ui, sans-serif; }
+  #wrap { position: relative; width: min(100vw, 177.78vh); aspect-ratio: 16 / 9; }
+  canvas { display: block; width: 100%; height: 100%; background: #0b0b14; }
+  #hint { position: absolute; left: 0; right: 0; bottom: 10px; text-align: center;
+          color: #8f8fb0; font-size: clamp(11px, 1.6vw, 16px); letter-spacing: .12em;
+          pointer-events: none; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="hint">Space / Click / Tap — flip gravity &nbsp;·&nbsp; dodge the spikes</div>
+</div>
+<script>
+"use strict";
+// FLIP RUN — a one-button gravity-flip runner.
+// One prompt built this: a square auto-runs, Space flips gravity,
+// spikes wait on the floor and the ceiling, score counts distance.
+// Single file, no libraries, no network.
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const W = 960, H = 540;
+const FLOOR = 470, CEIL = 70, SIZE = 34;
+const GRAV = 2400;
+
+const state = {
+  running: false, over: false,
+  y: FLOOR - SIZE, vy: 0, gravity: 1, // 1 = pulled down, -1 = pulled up
+  x: 170, speed: 300, dist: 0, best: 0,
+  spikes: [], spawnIn: 0.9, time: 0, flashes: 0,
+};
+
+const stars = [];
+for (let i = 0; i < 90; i++) {
+  stars.push({ x: Math.random() * W, y: Math.random() * H,
+               r: Math.random() * 1.8 + 0.4, s: 20 + Math.random() * 60 });
+}
+
+function reset() {
+  state.running = true; state.over = false;
+  state.y = FLOOR - SIZE; state.vy = 0; state.gravity = 1;
+  state.speed = 300; state.dist = 0;
+  state.spikes = []; state.spawnIn = 0.9; state.time = 0;
+}
+
+function flip() {
+  if (state.over) { reset(); return; }
+  if (!state.running) { reset(); return; }
+  state.gravity *= -1;
+  state.vy = -state.gravity * 260;
+  state.flashes++;
+}
+
+function spawnSpike() {
+  const onFloor = Math.random() < 0.5;
+  const w = 26 + Math.random() * 22;
+  state.spikes.push({ x: W + 40, w: w, top: !onFloor });
+}
+
+function update(dt) {
+  state.time += dt;
+  if (!state.running || state.over) return;
+  state.speed = Math.min(560, 300 + state.dist * 0.55);
+  state.dist += state.speed * dt / 50;
+  state.vy += GRAV * state.gravity * dt;
+  state.y += state.vy * dt;
+  if (state.gravity === 1 && state.y > FLOOR - SIZE) {
+    state.y = FLOOR - SIZE; state.vy = 0;
+  }
+  if (state.gravity === -1 && state.y < CEIL) {
+    state.y = CEIL; state.vy = 0;
+  }
+  state.spawnIn -= dt;
+  if (state.spawnIn <= 0) {
+    spawnSpike();
+    state.spawnIn = 0.85 + Math.random() * 0.55;
+  }
+  for (const s of state.spikes) s.x -= state.speed * dt;
+  state.spikes = state.spikes.filter((s) => s.x + s.w > -60);
+  // Collision: shrink the player box a little so near-misses feel fair.
+  const px0 = state.x + 5, px1 = state.x + SIZE - 5;
+  const py0 = state.y + 5, py1 = state.y + SIZE - 5;
+  for (const s of state.spikes) {
+    const sy0 = s.top ? CEIL : FLOOR - 34;
+    const sy1 = s.top ? CEIL + 34 : FLOOR;
+    if (px1 > s.x + 4 && px0 < s.x + s.w - 4 && py1 > sy0 && py0 < sy1) {
+      state.over = true;
+      state.best = Math.max(state.best, Math.floor(state.dist));
+      return;
+    }
+  }
+}
+
+function spikePath(s) {
+  ctx.beginPath();
+  if (s.top) {
+    ctx.moveTo(s.x, CEIL);
+    ctx.lineTo(s.x + s.w / 2, CEIL + 34);
+    ctx.lineTo(s.x + s.w, CEIL);
+  } else {
+    ctx.moveTo(s.x, FLOOR);
+    ctx.lineTo(s.x + s.w / 2, FLOOR - 34);
+    ctx.lineTo(s.x + s.w, FLOOR);
+  }
+  ctx.closePath();
+}
+
+function draw() {
+  ctx.fillStyle = "#0b0b14";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  for (const st of stars) {
+    const sx = (st.x - state.time * st.s) % W;
+    ctx.globalAlpha = 0.25 + 0.55 * Math.abs(Math.sin(state.time * 2 + st.x));
+    ctx.fillRect(sx < 0 ? sx + W : sx, st.y, st.r, st.r);
+  }
+  ctx.globalAlpha = 1;
+  // Speed streaks
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 7; i++) {
+    const yy = 100 + i * 55;
+    const off = (state.time * state.speed * (1 + i * 0.13)) % 240;
+    ctx.beginPath();
+    ctx.moveTo(W - off, yy);
+    ctx.lineTo(W - off - 90, yy);
+    ctx.stroke();
+  }
+  // Floor and ceiling rails
+  ctx.fillStyle = "#1c1c30";
+  ctx.fillRect(0, FLOOR, W, H - FLOOR);
+  ctx.fillRect(0, 0, W, CEIL);
+  ctx.fillStyle = "#ff2d95";
+  ctx.fillRect(0, FLOOR, W, 4);
+  ctx.fillRect(0, CEIL - 4, W, 4);
+  // Spikes
+  for (const s of state.spikes) {
+    spikePath(s);
+    ctx.fillStyle = "#22d3ee";
+    ctx.fill();
+    ctx.strokeStyle = "#a5f3fc";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  // Player
+  const px = state.x, py = state.y;
+  ctx.save();
+  ctx.shadowColor = "#ff2d95";
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = "#ff2d95";
+  ctx.fillRect(px, py, SIZE, SIZE);
+  ctx.restore();
+  ctx.fillStyle = "#ffffff";
+  const eyeY = state.gravity === 1 ? py + 12 : py + SIZE - 16;
+  ctx.fillRect(px + 19, eyeY, 8, 5);
+  ctx.fillRect(px + 7, eyeY, 5, 5);
+  // HUD: title sits in the ceiling band above the spikes; the score lives
+  // in the floor band below them, so neither ever overlaps a spike.
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 30px 'Segoe UI', system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("FLIP RUN", 24, 48);
+  ctx.textAlign = "right";
+  ctx.font = "bold 40px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(String(Math.floor(state.dist)).padStart(4, "0"), W - 24, 528);
+  ctx.font = "15px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillStyle = "#8f8fb0";
+  ctx.fillText("SCORE", W - 24, 498);
+  if (!state.running || state.over) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(11,11,20,0.72)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 52px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(state.over ? "WIPED OUT!" : "FLIP RUN", W / 2, H / 2 - 30);
+    ctx.font = "24px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillStyle = "#22d3ee";
+    if (state.over) ctx.fillText("Score " + Math.floor(state.dist) +
+      "  ·  Best " + state.best, W / 2, H / 2 + 12);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "20px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(state.over ? "Press SPACE to run again" :
+      "One prompt built this game — press SPACE to play", W / 2, H / 2 + 52);
+  }
+}
+
+// Expose a tiny read-only snapshot so an automated driver can play
+// with real key presses (used to record the gameplay for the video).
+window.FLIP = {
+  snapshot: function () {
+    return {
+      running: state.running, over: state.over,
+      y: state.y, gravity: state.gravity,
+      spikes: state.spikes.map((s) => ({ x: s.x, w: s.w, top: s.top })),
+    };
+  },
+};
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "ArrowUp") { e.preventDefault(); flip(); }
+  if (e.code === "Enter") { if (state.over || !state.running) reset(); }
+});
+canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); flip(); });
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+draw();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
